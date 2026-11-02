@@ -1,8 +1,8 @@
 {
   "name": "cyclon-vscode",
   "displayName": "Cyclon \u2014 Multi-Agent Code Scanner",
-  "description": "AI code review powered by Grok. Finds security bugs, logic errors and performance issues and shows them as Problems diagnostics.",
-  "version": "0.1.0",
+  "description": "Multi-agent AI code review with live scan activity, Problems diagnostics and a Postman-style report.",
+  "version": "0.2.0",
   "publisher": "saadfath",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -142,8 +142,9 @@
     "views": {
       "cyclon": [
         {
-          "id": "cyclon.overview",
-          "name": "Overview"
+          "id": "cyclon.dashboard",
+          "name": "Dashboard",
+          "type": "webview"
         },
         {
           "id": "cyclon.findings",
@@ -159,6 +160,26 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "cyclon.scanWorkspace",
+          "when": "view == cyclon.dashboard",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cyclon.cancelScan",
+          "when": "view == cyclon.dashboard && cyclon.scanning",
+          "group": "navigation@2"
+        },
+        {
+          "command": "cyclon.showReport",
+          "when": "view == cyclon.dashboard",
+          "group": "navigation@3"
+        },
+        {
+          "command": "cyclon.clearFindings",
+          "when": "view == cyclon.dashboard",
+          "group": "navigation@4"
+        },
         {
           "command": "cyclon.scanWorkspace",
           "when": "view == cyclon.findings",
@@ -188,11 +209,6 @@
           "command": "cyclon.refresh",
           "when": "view == cyclon.findings",
           "group": "navigation@6"
-        },
-        {
-          "command": "cyclon.scanWorkspace",
-          "when": "view == cyclon.overview",
-          "group": "navigation@1"
         }
       ],
       "view/item/context": [
@@ -335,7 +351,7 @@
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "package": "npx --yes @vscode/vsce package",
-    "install:vsix": "npm run package && code --install-extension cyclon-vscode-0.1.0.vsix --force",
+    "install:vsix": "npm run package && code --install-extension cyclon-vscode-0.2.0.vsix --force",
     "vscode:prepublish": "npm run typecheck && npm run build",
     "test": "node test/smoke-test.js"
   },

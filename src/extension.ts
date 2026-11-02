@@ -5,8 +5,11 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 import { CyclonRunner, ScanCancelledError, prepareReportPath } from "./cyclon";
-import { FindingsProvider, OverviewProvider } from "./findingsTree";
-import { FindingDetailPanel, ReportPanel } from "./panels";
+import { DashboardProvider } from "./dashboard";
+import type { CyclonEvent } from "./events";
+import { FindingsProvider } from "./findingsTree";
+import { FindingDetailPanel } from "./panels";
+import { ReportPanel } from "./report";
 import { ScanStore, type FindingRef } from "./store";
 import { SEVERITIES, type ScanRecord, type Severity, type SeverityFilter } from "./types";
 import { severityRank, truncate } from "./util";
@@ -33,27 +36,36 @@ export function activate(context: vscode.ExtensionContext): void {
   activeRunner = runner;
 
   const findingsProvider = new FindingsProvider(store);
-  const overviewProvider = new OverviewProvider(store);
   const findingsView = vscode.window.createTreeView("cyclon.findings", {
     treeDataProvider: findingsProvider,
     showCollapseAll: true,
   });
-  const overviewView = vscode.window.createTreeView("cyclon.overview", {
-    treeDataProvider: overviewProvider,
-  });
-  context.subscriptions.push(findingsView, overviewView);
+  context.subscriptions.push(findingsView);
+
+  const dashboard = new DashboardProvider(store);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(DashboardProvider.viewType, dashboard, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   status.name = "Cyclon";
-  status.command = "cyclon.findings.focus";
+  status.command = "cyclon.dashboard.focus";
   context.subscriptions.push(status);
 
   let activeCancellation: vscode.CancellationTokenSource | undefined;
+  let scanProgress: { done: number; total: number } | undefined;
 
   const updateStatus = (): void => {
     if (runner.running) {
-      status.text = "$(sync~spin) Cyclon";
-      status.tooltip = "Cyclon is scanning…";
+      if (scanProgress && scanProgress.total > 0) {
+        status.text = `$(sync~spin) ${scanProgress.done}/${scanProgress.total}`;
+        status.tooltip = `Cyclon is scanning… ${scanProgress.done} of ${scanProgress.total} files`;
+      } else {
+        status.text = "$(sync~spin) Cyclon";
+        status.tooltip = "Cyclon is scanning…";
+      }
       status.backgroundColor = undefined;
       return;
     }
@@ -109,6 +121,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const reportPath = prepareReportPath(context.globalStorageUri.fsPath);
     const env = buildEnvironment(storedKeys, config);
 
+    dashboard.start(label, target);
     output.show(true);
     output.appendLine("");
     output.appendLine(`▶ cyclon scan ${target}`);
@@ -136,10 +149,42 @@ export function activate(context: vscode.ExtensionContext): void {
             return await runner.run(
               { target, htmlPath: reportPath, env },
               cancellation.token,
-              (line) => {
-                output.appendLine(line);
-                const message = line.replace(/^Scanning\s+/i, "");
-                progress.report({ message: truncate(message, 80) });
+              {
+                onLog: (line) => {
+                  output.appendLine(line);
+                  const message = line.replace(/^Scanning\s+/i, "");
+                  progress.report({ message: truncate(message, 80) });
+                },
+                onEvent: (event: CyclonEvent) => {
+                  dashboard.handleEvent(event);
+                  if (event.type === "start") {
+                    scanProgress = { done: 0, total: event.files };
+                    updateStatus();
+                  } else if (event.type === "file_done") {
+                    if (scanProgress) {
+                      scanProgress.done = Math.min(
+                        scanProgress.total || scanProgress.done + 1,
+                        scanProgress.done + 1,
+                      );
+                    }
+                    updateStatus();
+                  }
+                  if (event.type === "file_start") {
+                    progress.report({
+                      message: truncate(`Scanning ${event.file} · ${event.agent}`, 80),
+                    });
+                  } else if (event.type === "finding") {
+                    progress.report({
+                      message: truncate(`Found: ${event.finding.title}`, 80),
+                    });
+                  } else if (event.type === "file_done") {
+                    progress.report({
+                      message: truncate(`${event.file} · ${event.count} finding(s)`, 80),
+                    });
+                  } else if (event.type === "done") {
+                    progress.report({ message: `Finished ${event.files_scanned} file(s)` });
+                  }
+                },
               },
             );
           } finally {
@@ -150,10 +195,12 @@ export function activate(context: vscode.ExtensionContext): void {
     } catch (error) {
       if (error instanceof ScanCancelledError) {
         output.appendLine("Scan cancelled.");
+        dashboard.cancel();
       } else {
         const message = error instanceof Error ? error.message : String(error);
         output.appendLine(`ERROR: ${message}`);
         const firstLine = message.split(/\r?\n/)[0];
+        dashboard.fail(firstLine);
         const choice = await vscode.window.showErrorMessage(
           `Cyclon: ${truncate(firstLine, 160)}`,
           "Show Log",
@@ -168,6 +215,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     } finally {
       activeCancellation = undefined;
+      scanProgress = undefined;
       cancellation.dispose();
       await setScanningContext(false);
       updateStatus();
@@ -182,25 +230,27 @@ export function activate(context: vscode.ExtensionContext): void {
     } else {
       store.setRecord(record);
     }
+    const finalRecord = store.record ?? record;
+    dashboard.finish(finalRecord);
 
-    const issueCount = record.findings.length;
-    const parts = [`Cyclon: ${issueCount} issue(s) in ${record.files_scanned} file(s)`];
-    if (record.errors.length > 0) {
-      parts.push(`${record.errors.length} error(s) — see the Overview view`);
+    const issueCount = finalRecord.findings.length;
+    const parts = [`Cyclon: ${issueCount} issue(s) in ${finalRecord.files_scanned} file(s)`];
+    if (finalRecord.errors.length > 0) {
+      parts.push(`${finalRecord.errors.length} error(s) — see the Cyclon dashboard`);
     }
     const actions = ["Show Problems"];
-    if (fs.existsSync(record.reportPath)) {
+    if (fs.existsSync(finalRecord.reportPath)) {
       actions.push("Open Report");
     }
     const choice = await vscode.window.showInformationMessage(parts.join(" · "), ...actions);
     if (choice === "Show Problems") {
       await vscode.commands.executeCommand("workbench.actions.view.problems");
     } else if (choice === "Open Report") {
-      ReportPanel.show(record);
+      ReportPanel.show(finalRecord);
     }
 
     if (config.get<boolean>("openReportAfterScan", false)) {
-      ReportPanel.show(record);
+      ReportPanel.show(finalRecord);
     }
   };
 
@@ -497,9 +547,15 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  context.subscriptions.push(store.onDidChange(() => updateStatus()));
+  context.subscriptions.push(
+    store.onDidChange(() => {
+      updateStatus();
+      dashboard.sync();
+    }),
+  );
 
   updateStatus();
+  dashboard.sync();
   status.show();
 }
 

@@ -4,13 +4,13 @@ Multi-agent AI code review inside VS Code, powered by the [cyclon](https://githu
 
 Cyclon scans your workspace with several specialist agents (security, bugs/logic, performance/quality) and brings the results back as native editor feedback:
 
+- **Live dashboard** in the Cyclon sidebar: per-file progress, agent activity, a streaming event feed and severity counters — you see what is happening while the scan runs
+- **Postman-style report**: sidebar navigation by severity / category / file, Overview + Findings + Raw JSON tabs, severity donut, search and sort, and one-click copy/open actions
 - **Problems panel diagnostics** with severity, category and suggested fix
 - **Findings tree** grouped by file, with severity filtering
-- **Overview view** with severity counts, scan time and errors
 - **Quick actions** on any diagnostic: show details / copy suggested fix
 - **Finding details panel** with description and suggested fix
-- **HTML report** rendered in a webview (same report the CLI generates)
-- **Status bar** summary that turns red/amber when serious issues are found
+- **Status bar** progress (`3/12` while scanning) that turns red/amber when serious issues are found
 - **Scan on save** (optional) that merges fresh results into existing findings
 
 ## Requirements
@@ -43,7 +43,7 @@ You can also use the environment variables the CLI already understands: `XAI_API
 | `Cyclon: Scan This Path` | Right-click a file or folder in the Explorer. |
 | `Cyclon: Cancel Scan` | Stop the running scan. |
 | `Cyclon: Filter Findings by Severity` | Filter the findings tree. |
-| `Cyclon: Open HTML Report` | Show the generated report in a webview. |
+| `Cyclon: Open HTML Report` | Open the Postman-style report panel. |
 | `Cyclon: Show Finding Details` | Open the details panel for a finding. |
 | `Cyclon: Copy Suggested Fix` | Copy the suggested fix to the clipboard. |
 | `Cyclon: Set API Keys` / `Clear Stored API Keys` | Manage secrets. |
@@ -80,12 +80,15 @@ You can also use the environment variables the CLI already understands: `XAI_API
 The extension is a thin, typed wrapper around the CLI:
 
 ```
-VS Code  ──spawn──▶  cyclon scan <path> --json --no-open --html <report>
+VS Code  ──spawn──▶  cyclon scan <path> --json --no-open --html <report> --events
    ▲                                   │
    └──── JSON findings + HTML report ◀─┘
+                     + JSONL live events (stderr)
 ```
 
-Findings are mapped to `vscode.Diagnostic`s (critical/high → Error, medium → Warning, low → Information, info → Hint) and published to the Problems panel. The HTML report is loaded into a webview. No scan logic is duplicated, so improvements to the CLI automatically flow into the extension.
+The CLI emits machine-readable progress events (`@@cyclon@@ {json}` on stderr) while it scans. The extension parses them in real time to drive the dashboard and the status bar. If the installed CLI does not support `--events`, the extension automatically retries without it and falls back to plain output.
+
+Findings are mapped to `vscode.Diagnostic`s (critical/high → Error, medium → Warning, low → Information, info → Hint) and published to the Problems panel. The report panel is rendered natively by the extension from the scan result. No scan logic is duplicated, so improvements to the CLI automatically flow into the extension.
 
 ## Development
 
@@ -103,7 +106,7 @@ Package a VSIX:
 
 ```bash
 npm run package
-code --install-extension cyclon-vscode-0.1.0.vsix
+code --install-extension cyclon-vscode-0.2.0.vsix
 ```
 
 ## Privacy

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0
+
+- New **live dashboard** in the Cyclon sidebar: scan progress, per-agent activity, streaming event feed, severity counters and elapsed time.
+- New **Postman-style report panel**: sidebar navigation (severity / category / file), Overview / Findings / Raw JSON tabs, severity donut, top categories, search and sort, copy/open actions.
+- The CLI now supports `cyclon scan --events`, a JSONL progress stream consumed by the extension.
+- Status bar shows live `done/total` file progress while scanning.
+- Restyled the finding details panel.
+- Removed the separate Overview tree (replaced by the dashboard).
+- Graceful fallback for older CLIs that do not support `--events`.
+
 ## 0.1.0
 
 - Initial release.

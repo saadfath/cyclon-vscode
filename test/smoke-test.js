@@ -112,6 +112,8 @@ function createVscodeMock(workspaceDir) {
   const commands = new Map();
   const diagnosticsByFile = new Map();
   const storage = {};
+  let dashboardProvider;
+  let lastPanel;
 
   const vscode = {
     EventEmitter,
@@ -134,6 +136,10 @@ function createVscodeMock(workspaceDir) {
       createOutputChannel: () => ({ appendLine() {}, show() {}, dispose() {} }),
       createStatusBarItem: () => ({ show() {}, dispose() {} }),
       createTreeView: () => noopDisposable,
+      registerWebviewViewProvider: (_id, provider) => {
+        dashboardProvider = provider;
+        return noopDisposable;
+      },
       showInformationMessage: async () => undefined,
       showWarningMessage: async () => undefined,
       showErrorMessage: async () => undefined,
@@ -144,12 +150,21 @@ function createVscodeMock(workspaceDir) {
           { report() {} },
           { isCancellationRequested: false, onCancellationRequested: () => noopDisposable },
         ),
-      createWebviewPanel: () => ({
-        webview: { html: "", onDidReceiveMessage: () => noopDisposable },
-        onDidDispose: () => noopDisposable,
-        reveal() {},
-        dispose() {},
-      }),
+      createWebviewPanel: () => {
+        const panel = {
+          title: "",
+          webview: {
+            html: "",
+            cspSource: "vscode-webview:",
+            onDidReceiveMessage: () => noopDisposable,
+          },
+          onDidDispose: () => noopDisposable,
+          reveal() {},
+          dispose() {},
+        };
+        lastPanel = panel;
+        return panel;
+      },
     },
     workspace: {
       workspaceFolders: [{ name: "smoke", uri: Uri.file(workspaceDir) }],
@@ -198,7 +213,15 @@ function createVscodeMock(workspaceDir) {
     globalStorageUri: Uri.file(path.join(workspaceDir, ".cyclon-storage")),
   };
 
-  return { vscode, commands, diagnosticsByFile, storage, context };
+  return {
+    vscode,
+    commands,
+    diagnosticsByFile,
+    storage,
+    context,
+    getDashboardProvider: () => dashboardProvider,
+    getLastPanel: () => lastPanel,
+  };
 }
 
 async function main() {
@@ -209,6 +232,11 @@ async function main() {
     "def divide(a, b):\n    return a / b\n",
     "utf8",
   );
+  if (!live) {
+    // Exercise multi-agent fan-out in the offline test.
+    fs.writeFileSync(path.join(workspaceDir, "extra.js"), "const x = null;\nconsole.log(x.y);\n", "utf8");
+    fs.writeFileSync(path.join(workspaceDir, "third.py"), "def first(items):\n    return items[0]\n", "utf8");
+  }
 
   let server;
   if (!live) {
@@ -230,7 +258,8 @@ async function main() {
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
 
-    process.env.XAI_API_KEY = "smoke-test-key";
+    process.env.XAI_API_KEYS = "smoke-key-1,smoke-key-2,smoke-key-3";
+    delete process.env.XAI_API_KEY;
     process.env.XAI_BASE_URL = `http://127.0.0.1:${port}/v1`;
   }
 
@@ -255,6 +284,26 @@ async function main() {
       throw new Error(`Missing commands: ${missing.join(", ")}`);
     }
 
+    const provider = mock.getDashboardProvider();
+    if (!provider) {
+      throw new Error("Dashboard webview view provider was not registered");
+    }
+    const messages = [];
+    provider.resolveWebviewView({
+      visible: true,
+      webview: {
+        options: {},
+        html: "",
+        cspSource: "vscode-webview:",
+        onDidReceiveMessage: () => noopDisposable,
+        postMessage: async (message) => {
+          messages.push(message);
+          return true;
+        },
+      },
+      onDidChangeVisibility: () => noopDisposable,
+    });
+
     await mock.commands.get("cyclon.scanWorkspace")();
 
     const target = path.join(workspaceDir, "test.py");
@@ -276,13 +325,58 @@ async function main() {
       }
     }
 
+    const states = messages.filter((message) => message.type === "state").map((message) => message.state);
+    if (states.length === 0) {
+      throw new Error("Dashboard never received a state update");
+    }
+    const liveStates = states.filter((state) => state.phase === "scanning");
+    if (liveStates.length === 0) {
+      throw new Error("Dashboard never entered the scanning phase");
+    }
+    const feedKinds = new Set(states.flatMap((state) => state.feed.map((item) => item.kind)));
+    if (!feedKinds.has("file")) {
+      throw new Error(`Dashboard feed never showed file activity: ${[...feedKinds].join(", ")}`);
+    }
+    if (!feedKinds.has("finding")) {
+      throw new Error(`Dashboard feed never showed a finding: ${[...feedKinds].join(", ")}`);
+    }
+    const finalState = states[states.length - 1];
+    if (finalState.phase !== "done") {
+      throw new Error(`Dashboard did not finish in the done phase: ${finalState.phase}`);
+    }
+    if (finalState.findings < 1 || !finalState.hasReport) {
+      throw new Error(`Dashboard final state incomplete: ${JSON.stringify({ findings: finalState.findings, hasReport: finalState.hasReport })}`);
+    }
+    if (finalState.agents.length === 0) {
+      throw new Error("Dashboard did not record any agents");
+    }
+    if (!live && finalState.agents.length !== 3) {
+      throw new Error(`Expected 3 agents, got ${finalState.agents.length}`);
+    }
+    if (!live && finalState.totalFiles !== 3) {
+      throw new Error(`Expected 3 files, got ${finalState.totalFiles}`);
+    }
+
     const saved = mock.storage["cyclon.lastScan"];
     if (!saved || saved.findings.length < 1) {
       throw new Error("Scan result was not persisted to workspaceState");
     }
 
+    await mock.commands.get("cyclon.showReport")();
+    const panel = mock.getLastPanel();
+    if (!panel || !panel.webview.html.includes("Scan report")) {
+      throw new Error("Report panel did not render the Postman-style report");
+    }
+    if (process.env.CYCLON_DUMP_REPORT) {
+      fs.writeFileSync(process.env.CYCLON_DUMP_REPORT, panel.webview.html, "utf8");
+    }
+    if (process.env.CYCLON_DUMP_DASHBOARD) {
+      fs.writeFileSync(process.env.CYCLON_DUMP_DASHBOARD, provider.view?.webview?.html ?? "", "utf8");
+    }
+
     extension.deactivate();
     console.log(`OK: ${diagnostics.length} diagnostic(s) published for ${target}`);
+    console.log(`OK: dashboard live states=${states.length}, agents=${finalState.agents.length}, feed=${finalState.feed.length}`);
     console.log(`OK: ${mock.commands.size} commands registered, result persisted`);
   } finally {
     Module._load = originalLoad;

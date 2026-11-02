@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 
 import * as vscode from "vscode";
 
+import { EVENT_PREFIX, parseCyclonEvent, type CyclonEvent } from "./events";
 import type { ScanPayload, ScanRecord } from "./types";
 
 export class CyclonError extends Error {
@@ -29,6 +30,13 @@ export interface RunOptions {
   env: NodeJS.ProcessEnv;
   /** Per-run prompt override. Falls back to the `cyclon.extraPrompt` setting. */
   extraPrompt?: string;
+}
+
+export interface RunHandlers {
+  /** Called for ordinary CLI log lines (stderr that is not an event). */
+  onLog: (line: string) => void;
+  /** Called for each machine-readable progress event, when supported. */
+  onEvent?: (event: CyclonEvent) => void;
 }
 
 interface ExecResult {
@@ -84,36 +92,62 @@ export class CyclonRunner {
   async run(
     options: RunOptions,
     token: vscode.CancellationToken,
-    onLog: (line: string) => void,
+    handlers: RunHandlers | ((line: string) => void),
   ): Promise<ScanRecord> {
+    const h: RunHandlers = typeof handlers === "function" ? { onLog: handlers } : handlers;
     this.cancelled = false;
     this.timedOut = false;
 
     const cfg = vscode.workspace.getConfiguration("cyclon");
-    const args = buildArgs(options, cfg);
     const cwd = workspaceCwd(options.target);
     const command = (cfg.get<string>("command", "cyclon") || "cyclon").trim();
+    const python = (cfg.get<string>("pythonPath", "python3") || "python3").trim();
+    const startedAt = Date.now();
 
+    let executable = command;
+    let prefix: string[] = [];
+    let agents: string[] | undefined;
+
+    const dispatch = (event: CyclonEvent): void => {
+      if (event.type === "start" && Array.isArray(event.agents)) {
+        agents = event.agents;
+      }
+      h.onEvent?.(event);
+    };
+
+    const execWith = (args: string[]): Promise<ExecResult> =>
+      this.exec(executable, [...prefix, ...args], cwd, options.env, token, h, dispatch);
+
+    let args = buildArgs(options, cfg, true);
     let result: ExecResult;
     try {
-      result = await this.exec(command, args, cwd, options.env, token, onLog);
+      result = await execWith(args);
     } catch (error) {
-      if (isEnoent(error)) {
-        const python = (cfg.get<string>("pythonPath", "python3") || "python3").trim();
-        onLog(`'${command}' not found on PATH — falling back to ${python} -m cyclon`);
-        try {
-          result = await this.exec(python, ["-m", "cyclon", ...args], cwd, options.env, token, onLog);
-        } catch (fallbackError) {
-          if (isEnoent(fallbackError)) {
-            throw new CyclonError(
-              `Could not find the cyclon CLI. Install it with "pip install -e cli-cyclon" or set "cyclon.command" / "cyclon.pythonPath".`,
-            );
-          }
-          throw fallbackError;
-        }
-      } else {
+      if (!isEnoent(error)) {
         throw error;
       }
+      h.onLog(`'${executable}' not found on PATH — falling back to ${python} -m cyclon`);
+      executable = python;
+      prefix = ["-m", "cyclon"];
+      try {
+        result = await execWith(args);
+      } catch (fallbackError) {
+        if (isEnoent(fallbackError)) {
+          throw new CyclonError(
+            `Could not find the cyclon CLI. Install it with "pip install -e cli-cyclon" or set "cyclon.command" / "cyclon.pythonPath".`,
+          );
+        }
+        throw fallbackError;
+      }
+    }
+
+    // Older CLI builds do not know --events: retry without it so the extension
+    // still works, just without live progress.
+    if (result.code !== 0 && eventsUnsupported(result.stderr)) {
+      h.onLog("The installed cyclon CLI does not support --events; retrying without live events.");
+      agents = undefined;
+      args = buildArgs(options, cfg, false);
+      result = await execWith(args);
     }
 
     if (this.timedOut) {
@@ -125,7 +159,11 @@ export class CyclonRunner {
     }
 
     if (result.code !== 0) {
-      const text = (result.stderr || result.stdout).trim();
+      const text = (result.stderr || result.stdout)
+        .split(/\r?\n/)
+        .filter((line) => !line.startsWith(EVENT_PREFIX))
+        .join("\n")
+        .trim();
       const tail = text.split(/\r?\n/).slice(-12).join("\n");
       if (/no api key/i.test(text)) {
         throw new CyclonError('No xAI API key configured. Run "Cyclon: Set API Keys" first.');
@@ -139,6 +177,8 @@ export class CyclonRunner {
       target: options.target,
       scannedAt: Date.now(),
       reportPath: options.htmlPath,
+      durationMs: Date.now() - startedAt,
+      agents,
     };
   }
 
@@ -148,7 +188,8 @@ export class CyclonRunner {
     cwd: string | undefined,
     env: NodeJS.ProcessEnv,
     token: vscode.CancellationToken,
-    onLog: (line: string) => void,
+    handlers: RunHandlers,
+    dispatch: (event: CyclonEvent) => void,
   ): Promise<ExecResult> {
     return new Promise<ExecResult>((resolve, reject) => {
       const child = spawn(command, args, {
@@ -189,6 +230,18 @@ export class CyclonRunner {
         }
       };
 
+      const handleLine = (line: string): void => {
+        if (!line.trim()) {
+          return;
+        }
+        const event = parseCyclonEvent(line);
+        if (event) {
+          dispatch(event);
+        } else {
+          handlers.onLog(line);
+        }
+      };
+
       child.stdout?.on("data", (data: Buffer) => {
         stdout += data.toString();
       });
@@ -200,9 +253,7 @@ export class CyclonRunner {
         const lines = stderrBuffer.split(/\r?\n/);
         stderrBuffer = lines.pop() ?? "";
         for (const line of lines) {
-          if (line.trim()) {
-            onLog(line);
-          }
+          handleLine(line);
         }
       });
 
@@ -222,7 +273,7 @@ export class CyclonRunner {
         settled = true;
         cleanup();
         if (stderrBuffer.trim()) {
-          onLog(stderrBuffer);
+          handleLine(stderrBuffer);
         }
         resolve({ code, stdout, stderr });
       });
@@ -230,8 +281,15 @@ export class CyclonRunner {
   }
 }
 
-function buildArgs(options: RunOptions, cfg: vscode.WorkspaceConfiguration): string[] {
+function buildArgs(
+  options: RunOptions,
+  cfg: vscode.WorkspaceConfiguration,
+  events: boolean,
+): string[] {
   const args = ["scan", options.target, "--json", "--no-open", "--html", options.htmlPath];
+  if (events) {
+    args.push("--events");
+  }
 
   if (!cfg.get<boolean>("useCache", true)) {
     args.push("--no-cache");
@@ -314,6 +372,15 @@ function workspaceCwd(target: string): string | undefined {
 
 function isEnoent(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT");
+}
+
+function eventsUnsupported(stderr: string): boolean {
+  return (
+    /events/i.test(stderr) &&
+    /(no such option|unexpected extra argument|unknown option|unrecognized option|no such parameter)/i.test(
+      stderr,
+    )
+  );
 }
 
 /** Create the directory that will hold HTML reports and return a fresh file path. */

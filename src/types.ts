@@ -29,6 +29,10 @@ export interface ScanRecord extends ScanPayload {
   scannedAt: number;
   /** Absolute path of the generated HTML report. */
   reportPath: string;
+  /** Agent names used for the scan, when known. */
+  agents?: string[];
+  /** Wall-clock duration of the scan in milliseconds. */
+  durationMs?: number;
 }
 
 export const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
