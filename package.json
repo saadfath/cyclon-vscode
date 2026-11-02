@@ -1,0 +1,348 @@
+{
+  "name": "cyclon-vscode",
+  "displayName": "Cyclon \u2014 Multi-Agent Code Scanner",
+  "description": "AI code review powered by Grok. Finds security bugs, logic errors and performance issues and shows them as Problems diagnostics.",
+  "version": "0.1.0",
+  "publisher": "saadfath",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/saadfath/cyclon-vscode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/saadfath/cyclon-vscode/issues"
+  },
+  "homepage": "https://github.com/saadfath/cyclon-vscode#readme",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "code review",
+    "security",
+    "grok",
+    "xai",
+    "scanner",
+    "bugs",
+    "cyclon"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Cyclon reads workspace files and sends them to the xAI API for analysis."
+    }
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cyclon.scanWorkspace",
+        "title": "Scan Workspace",
+        "category": "Cyclon",
+        "icon": "$(play)"
+      },
+      {
+        "command": "cyclon.scanFile",
+        "title": "Scan Current File",
+        "category": "Cyclon",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "cyclon.scanPath",
+        "title": "Scan This Path",
+        "category": "Cyclon"
+      },
+      {
+        "command": "cyclon.cancelScan",
+        "title": "Cancel Scan",
+        "category": "Cyclon",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "cyclon.clearFindings",
+        "title": "Clear Findings",
+        "category": "Cyclon",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "cyclon.filterSeverity",
+        "title": "Filter Findings by Severity",
+        "category": "Cyclon",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "cyclon.showReport",
+        "title": "Open HTML Report",
+        "category": "Cyclon",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "cyclon.setApiKeys",
+        "title": "Set API Keys",
+        "category": "Cyclon",
+        "icon": "$(key)"
+      },
+      {
+        "command": "cyclon.clearApiKeys",
+        "title": "Clear Stored API Keys",
+        "category": "Cyclon"
+      },
+      {
+        "command": "cyclon.showOutput",
+        "title": "Show Output Log",
+        "category": "Cyclon",
+        "icon": "$(output)"
+      },
+      {
+        "command": "cyclon.openFinding",
+        "title": "Go to Finding",
+        "category": "Cyclon"
+      },
+      {
+        "command": "cyclon.showFindingDetails",
+        "title": "Show Finding Details",
+        "category": "Cyclon",
+        "icon": "$(book)"
+      },
+      {
+        "command": "cyclon.copySuggestion",
+        "title": "Copy Suggested Fix",
+        "category": "Cyclon",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "cyclon.refresh",
+        "title": "Refresh",
+        "category": "Cyclon",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cyclon",
+          "title": "Cyclon",
+          "icon": "media/cyclon.svg"
+        }
+      ]
+    },
+    "views": {
+      "cyclon": [
+        {
+          "id": "cyclon.overview",
+          "name": "Overview"
+        },
+        {
+          "id": "cyclon.findings",
+          "name": "Findings"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "cyclon.findings",
+        "contents": "No scan results yet.\n[Scan Workspace](command:cyclon.scanWorkspace)\n[Scan Current File](command:cyclon.scanFile)\n[Set API Keys](command:cyclon.setApiKeys)\nCyclon sends your source files to the xAI API for review."
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "cyclon.scanWorkspace",
+          "when": "view == cyclon.findings",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cyclon.cancelScan",
+          "when": "view == cyclon.findings && cyclon.scanning",
+          "group": "navigation@2"
+        },
+        {
+          "command": "cyclon.filterSeverity",
+          "when": "view == cyclon.findings",
+          "group": "navigation@3"
+        },
+        {
+          "command": "cyclon.showReport",
+          "when": "view == cyclon.findings",
+          "group": "navigation@4"
+        },
+        {
+          "command": "cyclon.clearFindings",
+          "when": "view == cyclon.findings",
+          "group": "navigation@5"
+        },
+        {
+          "command": "cyclon.refresh",
+          "when": "view == cyclon.findings",
+          "group": "navigation@6"
+        },
+        {
+          "command": "cyclon.scanWorkspace",
+          "when": "view == cyclon.overview",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cyclon.showFindingDetails",
+          "when": "view == cyclon.findings && viewItem == cyclonFinding",
+          "group": "inline@1"
+        },
+        {
+          "command": "cyclon.copySuggestion",
+          "when": "view == cyclon.findings && viewItem == cyclonFinding",
+          "group": "inline@2"
+        },
+        {
+          "command": "cyclon.openFinding",
+          "when": "view == cyclon.findings && viewItem == cyclonFinding",
+          "group": "1_open@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "cyclon.scanPath",
+          "when": "resourceScheme == file",
+          "group": "navigation@90"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "cyclon.scanFile",
+          "when": "resourceScheme == file",
+          "group": "navigation@90"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "cyclon.scanFile",
+          "when": "resourceScheme == file",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "cyclon.openFinding",
+          "when": "false"
+        },
+        {
+          "command": "cyclon.refresh",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Cyclon",
+      "properties": {
+        "cyclon.command": {
+          "type": "string",
+          "default": "cyclon",
+          "markdownDescription": "Executable used to run scans. If it is not found on `PATH`, the extension falls back to `python -m cyclon`."
+        },
+        "cyclon.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python interpreter used for the `python -m cyclon` fallback."
+        },
+        "cyclon.model": {
+          "type": "string",
+          "default": "",
+          "description": "Grok model to use, e.g. grok-3-latest. Leave empty to use the CLI default."
+        },
+        "cyclon.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Override the xAI API base URL (sets XAI_BASE_URL). Leave empty for the CLI default."
+        },
+        "cyclon.concurrency": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 32,
+          "description": "Number of files scanned concurrently."
+        },
+        "cyclon.maxFileSize": {
+          "type": "number",
+          "default": 200000,
+          "minimum": 1000,
+          "description": "Maximum file size in bytes to scan."
+        },
+        "cyclon.extensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "File extensions to scan, e.g. `[\"py\", \"ts\"]`. Leave empty to use the CLI defaults."
+        },
+        "cyclon.extraPrompt": {
+          "type": "string",
+          "default": "",
+          "editPresentation": "multilineText",
+          "description": "Extra instructions appended to the scanner prompt."
+        },
+        "cyclon.useCache": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reuse cached findings for unchanged files."
+        },
+        "cyclon.scanOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically rescan a file after saving it. Results are merged with the current findings."
+        },
+        "cyclon.severityThreshold": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ],
+          "default": "info",
+          "description": "Minimum severity shown in the Problems panel."
+        },
+        "cyclon.timeoutMinutes": {
+          "type": "number",
+          "default": 20,
+          "minimum": 0,
+          "description": "Abort a scan after this many minutes. Set to 0 to disable."
+        },
+        "cyclon.openReportAfterScan": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open the HTML report automatically when a scan finishes."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "npx --yes @vscode/vsce package",
+    "install:vsix": "npm run package && code --install-extension cyclon-vscode-0.1.0.vsix --force",
+    "vscode:prepublish": "npm run typecheck && npm run build",
+    "test": "node test/smoke-test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}
